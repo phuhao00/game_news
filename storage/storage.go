@@ -5,7 +5,9 @@ import (
 	"sync"
 	"time"
 	"game-news/scraper"
-	_ "github.com/lib/pq"
+	"log"
+	"os"
+	"github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -23,24 +25,36 @@ type Storage struct {
 
 // NewStorage creates a new Storage instance
 func NewStorage() *Storage {
-	// 首先尝试连接PostgreSQL
-	db, err := sql.Open("pq", "host=db port=5432 user=game_news password=game_news_password dbname=game_news sslmode=disable")
-	if err != nil {
-		// 如果PostgreSQL连接失败，回退到SQLite
+	var db *sql.DB
+	var err error
+	
+	// 检查环境变量以确定使用哪种数据库
+	dbHost := os.Getenv("DB_HOST")
+	if dbHost != "" {
+		// 使用PostgreSQL
+		dbUser := getEnvOrDefault("DB_USER", "game_news")
+		dbPassword := getEnvOrDefault("DB_PASSWORD", "game_news_password")
+		dbName := getEnvOrDefault("DB_NAME", "game_news")
+		dbPort := getEnvOrDefault("DB_PORT", "5432")
+		
+		connStr := "host=" + dbHost + " port=" + dbPort + " user=" + dbUser + " password=" + dbPassword + " dbname=" + dbName + " sslmode=disable"
+		db, err = sql.Open("postgres", connStr)
+		if err != nil {
+			log.Fatal("Failed to connect to PostgreSQL: ", err)
+		}
+		
+		// 测试连接
+		if err := db.Ping(); err != nil {
+			log.Fatal("Failed to ping PostgreSQL: ", err)
+		}
+		log.Println("Connected to PostgreSQL database")
+	} else {
+		// 使用SQLite
 		db, err = sql.Open("sqlite3", "./game_news.db")
 		if err != nil {
-			panic(err)
+			log.Fatal("Failed to connect to SQLite: ", err)
 		}
-	} else {
-		// 测试PostgreSQL连接
-		if err := db.Ping(); err != nil {
-			// 如果连接测试失败，回退到SQLite
-			db.Close()
-			db, err = sql.Open("sqlite3", "./game_news.db")
-			if err != nil {
-				panic(err)
-			}
-		}
+		log.Println("Connected to SQLite database")
 	}
 	
 	// 创建表
@@ -80,7 +94,7 @@ func NewStorage() *Storage {
 	
 	_, err = db.Exec(createTableSQL)
 	if err != nil {
-		panic(err)
+		log.Fatal("Failed to create tables: ", err)
 	}
 	
 	return &Storage{
@@ -88,24 +102,48 @@ func NewStorage() *Storage {
 	}
 }
 
+// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
+func getEnvOrDefault(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+// isPostgreSQL 检查是否使用PostgreSQL数据库
+func (s *Storage) isPostgreSQL() bool {
+	// 检查驱动名称
+	return s.db.Driver() == &pq.Driver{}
+}
+
 // AddArticle adds a new article to storage
 func (s *Storage) AddArticle(article scraper.Article, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	insertSQL := `
-	INSERT INTO articles 
-	(id, title, url, image_url, summary, source, published_at, content)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	ON CONFLICT (id) DO UPDATE SET
-	title = EXCLUDED.title,
-	url = EXCLUDED.url,
-	image_url = EXCLUDED.image_url,
-	summary = EXCLUDED.summary,
-	source = EXCLUDED.source,
-	published_at = EXCLUDED.published_at,
-	content = EXCLUDED.content
-	`
+	var insertSQL string
+	if s.isPostgreSQL() {
+		insertSQL = `
+		INSERT INTO articles 
+		(id, title, url, image_url, summary, source, published_at, content)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (id) DO UPDATE SET
+		title = EXCLUDED.title,
+		url = EXCLUDED.url,
+		image_url = EXCLUDED.image_url,
+		summary = EXCLUDED.summary,
+		source = EXCLUDED.source,
+		published_at = EXCLUDED.published_at,
+		content = EXCLUDED.content
+		`
+	} else {
+		insertSQL = `
+		INSERT OR REPLACE INTO articles 
+		(id, title, url, image_url, summary, source, published_at, content)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`
+	}
 	
 	_, err := s.db.Exec(insertSQL, article.ID, article.Title, article.URL, article.ImageURL, article.Summary, article.Source, article.PublishedAt, content)
 	return err
@@ -121,19 +159,28 @@ func (s *Storage) AddArticles(articles []scraper.Article, scraper *scraper.Scrap
 		return err
 	}
 	
-	insertSQL := `
-	INSERT INTO articles 
-	(id, title, url, image_url, summary, source, published_at, content)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	ON CONFLICT (id) DO UPDATE SET
-	title = EXCLUDED.title,
-	url = EXCLUDED.url,
-	image_url = EXCLUDED.image_url,
-	summary = EXCLUDED.summary,
-	source = EXCLUDED.source,
-	published_at = EXCLUDED.published_at,
-	content = EXCLUDED.content
-	`
+	var insertSQL string
+	if s.isPostgreSQL() {
+		insertSQL = `
+		INSERT INTO articles 
+		(id, title, url, image_url, summary, source, published_at, content)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (id) DO UPDATE SET
+		title = EXCLUDED.title,
+		url = EXCLUDED.url,
+		image_url = EXCLUDED.image_url,
+		summary = EXCLUDED.summary,
+		source = EXCLUDED.source,
+		published_at = EXCLUDED.published_at,
+		content = EXCLUDED.content
+		`
+	} else {
+		insertSQL = `
+		INSERT OR REPLACE INTO articles 
+		(id, title, url, image_url, summary, source, published_at, content)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`
+	}
 	
 	stmt, err := tx.Prepare(insertSQL)
 	if err != nil {
@@ -207,6 +254,15 @@ func (s *Storage) GetArticleByID(id string) (ArticleWithContent, bool, error) {
 	WHERE id = $1
 	`
 	
+	// 对于SQLite，需要使用?占位符
+	if !s.isPostgreSQL() {
+		query = `
+		SELECT id, title, url, image_url, summary, source, published_at, content
+		FROM articles
+		WHERE id = ?
+		`
+	}
+	
 	var article ArticleWithContent
 	var publishedAt time.Time
 	
@@ -244,8 +300,26 @@ func (s *Storage) SearchArticles(query string) ([]ArticleWithContent, error) {
 	ORDER BY published_at DESC
 	`
 	
+	// 对于SQLite，需要使用LIKE和?占位符
+	if !s.isPostgreSQL() {
+		searchSQL = `
+		SELECT id, title, url, image_url, summary, source, published_at, content
+		FROM articles
+		WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
+		ORDER BY published_at DESC
+		`
+	}
+	
 	searchTerm := "%" + query + "%"
-	rows, err := s.db.Query(searchSQL, searchTerm)
+	var rows *sql.Rows
+	var err error
+	
+	if s.isPostgreSQL() {
+		rows, err = s.db.Query(searchSQL, searchTerm)
+	} else {
+		rows, err = s.db.Query(searchSQL, searchTerm, searchTerm, searchTerm)
+	}
+	
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +361,16 @@ func (s *Storage) FilterArticlesBySource(source string) ([]ArticleWithContent, e
 	WHERE source = $1
 	ORDER BY published_at DESC
 	`
+	
+	// 对于SQLite，需要使用?占位符
+	if !s.isPostgreSQL() {
+		query = `
+		SELECT id, title, url, image_url, summary, source, published_at, content
+		FROM articles
+		WHERE source = ?
+		ORDER BY published_at DESC
+		`
+	}
 	
 	rows, err := s.db.Query(query, source)
 	if err != nil {
@@ -331,7 +415,11 @@ func (s *Storage) GetRecentArticles(limit int) ([]ArticleWithContent, error) {
 	`
 	
 	if limit > 0 {
-		query += " LIMIT $1"
+		if s.isPostgreSQL() {
+			query += " LIMIT $1"
+		} else {
+			query += " LIMIT ?"
+		}
 	}
 	
 	var rows *sql.Rows
@@ -380,7 +468,15 @@ func (s *Storage) Cleanup(olderThan time.Duration) (int64, error) {
 	
 	cutoff := time.Now().Add(-olderThan)
 	
-	result, err := s.db.Exec("DELETE FROM articles WHERE published_at < $1", cutoff)
+	var result sql.Result
+	var err error
+	
+	if s.isPostgreSQL() {
+		result, err = s.db.Exec("DELETE FROM articles WHERE published_at < $1", cutoff)
+	} else {
+		result, err = s.db.Exec("DELETE FROM articles WHERE published_at < ?", cutoff)
+	}
+	
 	if err != nil {
 		return 0, err
 	}
@@ -394,10 +490,23 @@ func (s *Storage) CreateUser(username, passwordHash string) (int64, error) {
 	defer s.mu.Unlock()
 	
 	var id int64
-	err := s.db.QueryRow(
-		"INSERT INTO users (username, password_hash, created_at) VALUES ($1, $2, $3) RETURNING id",
-		username, passwordHash, time.Now(),
-	).Scan(&id)
+	var err error
+	
+	if s.isPostgreSQL() {
+		err = s.db.QueryRow(
+			"INSERT INTO users (username, password_hash, created_at) VALUES ($1, $2, $3) RETURNING id",
+			username, passwordHash, time.Now(),
+		).Scan(&id)
+	} else {
+		result, err := s.db.Exec(
+			"INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+			username, passwordHash, time.Now(),
+		)
+		if err != nil {
+			return 0, err
+		}
+		id, err = result.LastInsertId()
+	}
 	
 	if err != nil {
 		return 0, err
@@ -414,10 +523,18 @@ func (s *Storage) GetUserByUsername(username string) (int64, string, error) {
 	var id int64
 	var passwordHash string
 	
-	err := s.db.QueryRow(
-		"SELECT id, password_hash FROM users WHERE username = $1",
-		username,
-	).Scan(&id, &passwordHash)
+	var err error
+	if s.isPostgreSQL() {
+		err = s.db.QueryRow(
+			"SELECT id, password_hash FROM users WHERE username = $1",
+			username,
+		).Scan(&id, &passwordHash)
+	} else {
+		err = s.db.QueryRow(
+			"SELECT id, password_hash FROM users WHERE username = ?",
+			username,
+		).Scan(&id, &passwordHash)
+	}
 	
 	if err != nil {
 		return 0, "", err
@@ -431,10 +548,18 @@ func (s *Storage) AddBookmark(userID int64, articleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	_, err := s.db.Exec(
-		"INSERT INTO bookmarks (user_id, article_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-		userID, articleID, time.Now(),
-	)
+	var err error
+	if s.isPostgreSQL() {
+		_, err = s.db.Exec(
+			"INSERT INTO bookmarks (user_id, article_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+			userID, articleID, time.Now(),
+		)
+	} else {
+		_, err = s.db.Exec(
+			"INSERT OR IGNORE INTO bookmarks (user_id, article_id, created_at) VALUES (?, ?, ?)",
+			userID, articleID, time.Now(),
+		)
+	}
 	
 	return err
 }
@@ -444,10 +569,18 @@ func (s *Storage) RemoveBookmark(userID int64, articleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	_, err := s.db.Exec(
-		"DELETE FROM bookmarks WHERE user_id = $1 AND article_id = $2",
-		userID, articleID,
-	)
+	var err error
+	if s.isPostgreSQL() {
+		_, err = s.db.Exec(
+			"DELETE FROM bookmarks WHERE user_id = $1 AND article_id = $2",
+			userID, articleID,
+		)
+	} else {
+		_, err = s.db.Exec(
+			"DELETE FROM bookmarks WHERE user_id = ? AND article_id = ?",
+			userID, articleID,
+		)
+	}
 	
 	return err
 }
@@ -464,6 +597,17 @@ func (s *Storage) GetBookmarks(userID int64) ([]ArticleWithContent, error) {
 	WHERE b.user_id = $1
 	ORDER BY b.created_at DESC
 	`
+	
+	// 对于SQLite，需要使用?占位符
+	if !s.isPostgreSQL() {
+		query = `
+		SELECT a.id, a.title, a.url, a.image_url, a.summary, a.source, a.published_at, a.content
+		FROM articles a
+		JOIN bookmarks b ON a.id = b.article_id
+		WHERE b.user_id = ?
+		ORDER BY b.created_at DESC
+		`
+	}
 	
 	rows, err := s.db.Query(query, userID)
 	if err != nil {

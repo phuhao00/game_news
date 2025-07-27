@@ -162,6 +162,21 @@ For development with hot reloading, use the development Docker setup:
 
 This uses [Air](https://github.com/cosmtrek/air) for Go hot reloading.
 
+## Environment Variables
+
+The application supports the following environment variables for configuration:
+
+| Variable | Description | Default Value |
+|----------|-------------|---------------|
+| `DB_HOST` | Database host (set to use PostgreSQL) | (empty - uses SQLite) |
+| `DB_PORT` | Database port | `5432` |
+| `DB_USER` | Database user | `game_news` |
+| `DB_PASSWORD` | Database password | `game_news_password` |
+| `DB_NAME` | Database name | `game_news` |
+| `PORT` | Application port | `8080` |
+
+When running with Docker Compose, these variables are automatically set in the `docker-compose.yml` file.
+
 ## Troubleshooting
 
 ### Network Issues with Docker Compose
@@ -246,6 +261,8 @@ Articles are stored persistently in either PostgreSQL or SQLite with the followi
 - Bookmark system
 
 The application automatically detects if a PostgreSQL database is available and connects to it. If not, it falls back to SQLite for simpler setups.
+
+To use PostgreSQL, set the `DB_HOST` environment variable. Otherwise, SQLite will be used by default.
 
 ## Mobile App Version
 
