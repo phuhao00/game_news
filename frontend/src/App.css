@@ -255,12 +255,12 @@
   white-space: pre-line;
 }
 
-.news-link {
+.news-link, .news-actions {
   text-align: center;
   margin-top: 2rem;
 }
 
-.news-link a {
+.news-link a, .news-actions a, .news-actions button {
   display: inline-block;
   padding: 0.75rem 1.5rem;
   background-color: #28a745;
@@ -268,9 +268,12 @@
   text-decoration: none;
   border-radius: 4px;
   transition: background-color 0.3s ease;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
 }
 
-.news-link a:hover {
+.news-link a:hover, .news-actions a:hover, .news-actions button:hover {
   background-color: #218838;
 }
 
@@ -304,6 +307,86 @@
   color: #333;
 }
 
+/* Auth page styles */
+.auth-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 70vh;
+}
+
+.auth-container {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 400px;
+  color: #213547;
+}
+
+.auth-container h1 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
+
+.form-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 1rem;
+}
+
+.submit-button {
+  width: 100%;
+  padding: 0.75rem;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.submit-button:hover {
+  background-color: #0056b3;
+}
+
+.submit-button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.auth-toggle {
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.toggle-button {
+  background: none;
+  border: none;
+  color: #007bff;
+  cursor: pointer;
+  font-size: 1rem;
+  text-decoration: underline;
+}
+
+.toggle-button:hover {
+  color: #0056b3;
+}
+
 /* Loading and error states */
 .loading, .error, .not-found {
   text-align: center;
@@ -313,6 +396,10 @@
 
 .error {
   color: #ff6b6b;
+  background-color: #ffeaea;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
 }
 
 @media (max-width: 768px) {

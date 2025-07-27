@@ -151,6 +151,10 @@ Articles are stored persistently in SQLite with the following features:
 - User management with password hashing
 - Bookmark system
 
+## Mobile App Version
+
+For information about creating a mobile app version of this application, please see [MobileREADME.md](MobileREADME.md).
+
 ## Deployment
 
 To deploy this application to a production environment:

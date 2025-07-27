@@ -4,6 +4,7 @@ import NewsDetailPage from './pages/NewsDetailPage'
 import AboutPage from './pages/AboutPage'
 import SearchPage from './pages/SearchPage'
 import BookmarksPage from './pages/BookmarksPage'
+import AuthPage from './pages/AuthPage'
 import Header from './components/Header'
 import './App.css'
 
@@ -18,6 +19,7 @@ function App() {
           <Route path="/about" element={<AboutPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/bookmarks" element={<BookmarksPage />} />
+          <Route path="/auth" element={<AuthPage />} />
         </Routes>
       </main>
     </div>

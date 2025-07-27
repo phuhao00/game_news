@@ -13,6 +13,9 @@ const Header = () => {
     }
   }
 
+  // In a real implementation, you would check if the user is authenticated
+  const isAuthenticated = false // Placeholder
+
   return (
     <header className="header">
       <div className="container">
@@ -52,6 +55,21 @@ const Header = () => {
           >
             About
           </Link>
+          {isAuthenticated ? (
+            <Link 
+              to="/profile" 
+              className={`nav-link ${location.pathname === '/profile' ? 'active' : ''}`}
+            >
+              Profile
+            </Link>
+          ) : (
+            <Link 
+              to="/auth" 
+              className={`nav-link ${location.pathname === '/auth' ? 'active' : ''}`}
+            >
+              Login
+            </Link>
+          )}
         </nav>
       </div>
     </header>

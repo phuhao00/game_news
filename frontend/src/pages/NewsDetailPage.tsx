@@ -1,22 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { News } from '../types/news'
+import api, { News } from '../services/api'
 
 const NewsDetailPage = () => {
   const { id } = useParams<{ id: string }>()
   const [news, setNews] = useState<News | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isBookmarked, setIsBookmarked] = useState(false)
 
   useEffect(() => {
     const fetchNews = async () => {
       try {
-        // 模拟从API获取数据
-        const response = await fetch(`/api/news/${id}`)
-        if (!response.ok) {
-          throw new Error('Failed to fetch news')
-        }
-        const data = await response.json()
+        if (!id) return
+        
+        setLoading(true)
+        const data = await api.getNewsById(id)
         setNews(data)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An unknown error occurred')
@@ -25,10 +24,23 @@ const NewsDetailPage = () => {
       }
     }
 
-    if (id) {
-      fetchNews()
-    }
+    fetchNews()
   }, [id])
+
+  const toggleBookmark = async () => {
+    if (!news) return
+    
+    try {
+      if (isBookmarked) {
+        await api.removeBookmark(news.id)
+      } else {
+        await api.addBookmark(news.id)
+      }
+      setIsBookmarked(!isBookmarked)
+    } catch (err) {
+      console.error('Failed to toggle bookmark:', err)
+    }
+  }
 
   if (loading) {
     return <div className="loading">Loading...</div>
@@ -54,13 +66,24 @@ const NewsDetailPage = () => {
         <div className="news-content">
           {news.content}
         </div>
-        {news.url && (
-          <div className="news-link">
-            <a href={news.url} target="_blank" rel="noopener noreferrer">
+        <div className="news-actions">
+          {news.url && (
+            <a 
+              href={news.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="read-original"
+            >
               Read original article
             </a>
-          </div>
-        )}
+          )}
+          <button 
+            onClick={toggleBookmark}
+            className={`bookmark-button ${isBookmarked ? 'bookmarked' : ''}`}
+          >
+            {isBookmarked ? 'Remove Bookmark' : 'Bookmark Article'}
+          </button>
+        </div>
       </article>
     </div>
   )
