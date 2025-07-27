@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"time"
+	"os"
 	"game-news/scraper"
 	"game-news/storage"
 	"github.com/gin-gonic/gin"
@@ -68,7 +69,7 @@ func main() {
 	
 	// 配置CORS
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:8080"}, // Vite默认开发端口和生产端口
+		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:8080", "http://localhost:3000"}, // 开发和生产端口
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -83,6 +84,7 @@ func main() {
 	router.StaticFile("/news/*id", "./dist/index.html")
 	router.StaticFile("/search", "./dist/index.html")
 	router.StaticFile("/bookmarks", "./dist/index.html")
+	router.StaticFile("/auth", "./dist/index.html")
 	
 	// 设置API路由
 	api := router.Group("/api")
@@ -108,8 +110,14 @@ func main() {
 		}
 	}
 	
+	// 获取端口配置
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	
 	// 启动服务器
-	router.Run(":8080")
+	router.Run(":" + port)
 }
 
 // getNews 返回所有新闻

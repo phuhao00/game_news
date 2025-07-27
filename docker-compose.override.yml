@@ -1,7 +1,11 @@
+version: '3.8'
+
 services:
   # Go后端服务
   backend:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
     ports:
       - "8080:8080"
     depends_on:
@@ -13,7 +17,7 @@ services:
       - DB_PASSWORD=game_news_password
       - DB_NAME=game_news
     volumes:
-      - ./game_news.db:/root/game_news.db
+      - .:/app
     networks:
       - game_news_network
 

@@ -3,6 +3,9 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
+# 安装git用于获取依赖
+RUN apk add --no-cache git
+
 # 复制go mod和sum文件
 COPY go.mod go.sum ./
 RUN go mod download
@@ -10,7 +13,12 @@ RUN go mod download
 # 复制源代码
 COPY . .
 
-# 构建应用
+# 构建前端
+RUN cd frontend && \
+    npm install && \
+    npm run build
+
+# 构建Go应用
 RUN go build -o game-news .
 
 # 运行阶段
@@ -25,8 +33,9 @@ WORKDIR /root/
 COPY --from=builder /app/game-news .
 COPY --from=builder /app/game_news.db .
 
-# 复制前端构建文件（如果存在）
+# 复制前端构建文件
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/init.sql .
 
 # 暴露端口
 EXPOSE 8080

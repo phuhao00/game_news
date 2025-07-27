@@ -151,6 +151,67 @@ This will start the following services:
    docker run -p 8080:8080 game-news
    ```
 
+### Development with Hot Reloading
+
+For development with hot reloading, use the development Docker setup:
+
+1. Start the development environment:
+   ```bash
+   docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d
+   ```
+
+This uses [Air](https://github.com/cosmtrek/air) for Go hot reloading.
+
+## Troubleshooting
+
+### Network Issues with Docker Compose
+
+If you encounter network issues when pulling images with Docker Compose:
+
+1. Try using a different Docker registry mirror
+2. Manually pull the images:
+   ```bash
+   docker pull postgres:15-alpine
+   docker pull adminer:4.8.1
+   ```
+3. Then run:
+   ```bash
+   docker-compose up -d
+   ```
+
+### Database Connection Issues
+
+If the application cannot connect to the database:
+
+1. Ensure all services are running:
+   ```bash
+   docker-compose ps
+   ```
+
+2. Check the logs:
+   ```bash
+   docker-compose logs db
+   docker-compose logs backend
+   ```
+
+3. Verify the database connection parameters in the docker-compose.yml file
+
+### Frontend Build Issues
+
+If you encounter issues building the frontend:
+
+1. Clean the node_modules:
+   ```bash
+   cd frontend
+   rm -rf node_modules
+   npm install
+   ```
+
+2. Try building again:
+   ```bash
+   npm run build
+   ```
+
 ## API Endpoints
 
 ### Public Endpoints
