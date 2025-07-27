@@ -103,6 +103,14 @@ The application will be available at:
 
 2. The built files will be placed in the `dist/` directory, which is served by the Go backend.
 
+3. Run the production server:
+   ```bash
+   cd ..
+   go run main.go
+   ```
+
+The application will be available at http://localhost:8080
+
 ## API Endpoints
 
 - `GET /api/news` - Get all news
@@ -121,6 +129,26 @@ Articles are stored in-memory with the following features:
 - Efficient lookup by ID
 - Sorting by publication date
 - Content caching
+
+## Deployment
+
+To deploy this application to a production environment:
+
+1. Build the frontend:
+   ```bash
+   cd frontend
+   npm run build
+   ```
+
+2. The Go backend will automatically serve the built frontend from the `dist/` directory.
+
+3. Run the Go application:
+   ```bash
+   cd ..
+   go run main.go
+   ```
+
+4. Set up a reverse proxy (like Nginx) in front of the application for production use.
 
 ## Future Improvements
 
