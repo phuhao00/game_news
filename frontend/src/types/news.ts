@@ -8,3 +8,8 @@ export interface News {
   date: string
   url: string
 }
+
+export interface User {
+  id: number
+  username: string
+}

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { News } from '../types/news'
 
@@ -6,6 +7,13 @@ interface NewsItemProps {
 }
 
 const NewsItem = ({ news }: NewsItemProps) => {
+  const [isBookmarked, setIsBookmarked] = useState(false)
+
+  const toggleBookmark = () => {
+    // 在实际实现中，这里需要调用API来添加/删除书签
+    setIsBookmarked(!isBookmarked)
+  }
+
   return (
     <div className="news-item">
       <img src={news.image} alt={news.title} className="news-image" />
@@ -30,6 +38,12 @@ const NewsItem = ({ news }: NewsItemProps) => {
               Read original
             </a>
           )}
+          <button 
+            onClick={toggleBookmark}
+            className={`bookmark-button ${isBookmarked ? 'bookmarked' : ''}`}
+          >
+            {isBookmarked ? 'Bookmarked' : 'Bookmark'}
+          </button>
         </div>
       </div>
     </div>

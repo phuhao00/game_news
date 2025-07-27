@@ -14,19 +14,25 @@ A modern web application for collecting and browsing the latest game news, built
 - **Go** programming language
 - **Gin Web Framework** for REST API
 - **Colly** for web scraping
+- **SQLite** for data storage
 - **CORS** support for frontend integration
+- **BCrypt** for password hashing
 
 ## Features
 
-- Real-time game news aggregation
+- Real-time game news aggregation from multiple sources (GameSpot, IGN)
 - Modern and responsive UI
 - Fast and efficient backend
 - Type-safe codebase with TypeScript
 - Single Page Application (SPA) architecture
 - Automated news scraping with Colly
-- In-memory data storage with cleanup
+- Persistent data storage with SQLite
 - Full article content retrieval
 - Original source linking
+- Search functionality
+- Source filtering
+- User authentication (registration/login)
+- Bookmarking system
 
 ## Project Structure
 
@@ -37,6 +43,7 @@ game_news/
 │   │   ├── components/ # Reusable UI components
 │   │   ├── pages/      # Page components
 │   │   ├── hooks/      # Custom React hooks
+│   │   ├── services/   # API service layer
 │   │   ├── types/      # TypeScript types
 │   │   └── ...
 │   ├── public/         # Static assets
@@ -113,22 +120,36 @@ The application will be available at http://localhost:8080
 
 ## API Endpoints
 
-- `GET /api/news` - Get all news
+### Public Endpoints
+- `GET /api/news` - Get all news (with optional `source` query parameter)
 - `GET /api/news/:id` - Get a specific news by ID with full content
+- `GET /api/search` - Search news by query string (`q` parameter)
+- `GET /api/sources` - Get all news sources
+- `POST /api/users/register` - Register a new user
+- `POST /api/users/login` - Login as a user
+
+### Protected Endpoints
+- `POST /api/protected/bookmarks` - Add a bookmark
+- `DELETE /api/protected/bookmarks` - Remove a bookmark
+- `GET /api/protected/bookmarks` - Get user's bookmarks
 
 ## Web Scraping
 
-The application uses the Colly web scraping framework to collect game news from various sources. The scraper runs periodically to fetch the latest news and update the storage.
+The application uses the Colly web scraping framework to collect game news from various sources:
+- GameSpot (https://www.gamespot.com/news/)
+- IGN (https://www.ign.com/news)
 
-In the current implementation, we're using mock data to demonstrate the functionality. In a production environment, you would replace this with actual scraping logic for real game news websites.
+The scraper runs periodically to fetch the latest news and update the storage. It respects website rate limits to avoid being blocked.
 
 ## Data Storage
 
-Articles are stored in-memory with the following features:
+Articles are stored persistently in SQLite with the following features:
 - Automatic cleanup of articles older than 7 days
 - Efficient lookup by ID
 - Sorting by publication date
 - Content caching
+- User management with password hashing
+- Bookmark system
 
 ## Deployment
 
@@ -152,12 +173,10 @@ To deploy this application to a production environment:
 
 ## Future Improvements
 
-- [ ] Implement real web scraping from actual game news websites
-- [ ] Add search and filtering functionality
-- [ ] Implement user authentication and bookmarks
-- [ ] Add news comments and ratings
-- [ ] Create a mobile app version
-- [ ] Add database storage instead of in-memory storage
-- [ ] Implement rate limiting for API endpoints
 - [ ] Add RSS feed generation
 - [ ] Implement push notifications for breaking news
+- [ ] Add pagination for large result sets
+- [ ] Improve search algorithm with full-text search
+- [ ] Add social sharing features
+- [ ] Implement caching for better performance
+- [ ] Add admin panel for content management
