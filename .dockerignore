@@ -1,0 +1,25 @@
+# 忽略Git相关文件
+.git
+.gitignore
+
+# 忽略Node.js相关文件
+node_modules
+npm-debug.log
+
+# 忽略日志文件
+*.log
+
+# 忽略临时文件
+*.tmp
+*.temp
+
+# 忽略IDE相关文件
+.vscode
+.idea
+
+# 忽略构建输出
+dist/
+build/
+
+# 忽略环境变量文件
+.env

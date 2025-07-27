@@ -14,7 +14,7 @@ A modern web application for collecting and browsing the latest game news, built
 - **Go** programming language
 - **Gin Web Framework** for REST API
 - **Colly** for web scraping
-- **SQLite** for data storage
+- **PostgreSQL** or **SQLite** for data storage
 - **CORS** support for frontend integration
 - **BCrypt** for password hashing
 
@@ -26,7 +26,7 @@ A modern web application for collecting and browsing the latest game news, built
 - Type-safe codebase with TypeScript
 - Single Page Application (SPA) architecture
 - Automated news scraping with Colly
-- Persistent data storage with SQLite
+- Persistent data storage with PostgreSQL or SQLite
 - Full article content retrieval
 - Original source linking
 - Search functionality
@@ -62,6 +62,7 @@ game_news/
 - Go 1.21 or higher
 - Node.js 16 or higher
 - npm or yarn
+- Docker and Docker Compose (for containerized deployment)
 
 ### Installation
 
@@ -118,6 +119,38 @@ The application will be available at:
 
 The application will be available at http://localhost:8080
 
+## Docker & Docker Compose Deployment
+
+This application supports deployment using Docker and Docker Compose for easy setup and scalability.
+
+### Using Docker Compose (Recommended)
+
+1. Build and start all services:
+   ```bash
+   docker-compose up -d
+   ```
+
+This will start the following services:
+- Backend application on port 8080
+- PostgreSQL database on port 5432
+- Adminer database management tool on port 8081
+
+2. Access the application:
+   - Main application: http://localhost:8080
+   - Database management: http://localhost:8081
+
+### Using Individual Docker Commands
+
+1. Build the Docker image:
+   ```bash
+   docker build -t game-news .
+   ```
+
+2. Run the container:
+   ```bash
+   docker run -p 8080:8080 game-news
+   ```
+
 ## API Endpoints
 
 ### Public Endpoints
@@ -143,13 +176,15 @@ The scraper runs periodically to fetch the latest news and update the storage. I
 
 ## Data Storage
 
-Articles are stored persistently in SQLite with the following features:
+Articles are stored persistently in either PostgreSQL or SQLite with the following features:
 - Automatic cleanup of articles older than 7 days
 - Efficient lookup by ID
 - Sorting by publication date
 - Content caching
 - User management with password hashing
 - Bookmark system
+
+The application automatically detects if a PostgreSQL database is available and connects to it. If not, it falls back to SQLite for simpler setups.
 
 ## Mobile App Version
 

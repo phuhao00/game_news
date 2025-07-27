@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 	"game-news/scraper"
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -22,10 +23,24 @@ type Storage struct {
 
 // NewStorage creates a new Storage instance
 func NewStorage() *Storage {
-	// 初始化SQLite数据库
-	db, err := sql.Open("sqlite3", "./game_news.db")
+	// 首先尝试连接PostgreSQL
+	db, err := sql.Open("pq", "host=db port=5432 user=game_news password=game_news_password dbname=game_news sslmode=disable")
 	if err != nil {
-		panic(err)
+		// 如果PostgreSQL连接失败，回退到SQLite
+		db, err = sql.Open("sqlite3", "./game_news.db")
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		// 测试PostgreSQL连接
+		if err := db.Ping(); err != nil {
+			// 如果连接测试失败，回退到SQLite
+			db.Close()
+			db, err = sql.Open("sqlite3", "./game_news.db")
+			if err != nil {
+				panic(err)
+			}
+		}
 	}
 	
 	// 创建表
@@ -42,14 +57,14 @@ func NewStorage() *Storage {
 	);
 	
 	CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id SERIAL PRIMARY KEY,
 		username TEXT UNIQUE,
 		password_hash TEXT,
 		created_at TIMESTAMP
 	);
 	
 	CREATE TABLE IF NOT EXISTS bookmarks (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id SERIAL PRIMARY KEY,
 		user_id INTEGER,
 		article_id TEXT,
 		created_at TIMESTAMP,
@@ -58,7 +73,9 @@ func NewStorage() *Storage {
 	);
 	
 	CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
+	CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source);
 	CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id ON bookmarks(user_id);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_article_id ON bookmarks(article_id);
 	`
 	
 	_, err = db.Exec(createTableSQL)
@@ -77,9 +94,17 @@ func (s *Storage) AddArticle(article scraper.Article, content string) error {
 	defer s.mu.Unlock()
 	
 	insertSQL := `
-	INSERT OR REPLACE INTO articles 
+	INSERT INTO articles 
 	(id, title, url, image_url, summary, source, published_at, content)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	ON CONFLICT (id) DO UPDATE SET
+	title = EXCLUDED.title,
+	url = EXCLUDED.url,
+	image_url = EXCLUDED.image_url,
+	summary = EXCLUDED.summary,
+	source = EXCLUDED.source,
+	published_at = EXCLUDED.published_at,
+	content = EXCLUDED.content
 	`
 	
 	_, err := s.db.Exec(insertSQL, article.ID, article.Title, article.URL, article.ImageURL, article.Summary, article.Source, article.PublishedAt, content)
@@ -97,9 +122,17 @@ func (s *Storage) AddArticles(articles []scraper.Article, scraper *scraper.Scrap
 	}
 	
 	insertSQL := `
-	INSERT OR REPLACE INTO articles 
+	INSERT INTO articles 
 	(id, title, url, image_url, summary, source, published_at, content)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	ON CONFLICT (id) DO UPDATE SET
+	title = EXCLUDED.title,
+	url = EXCLUDED.url,
+	image_url = EXCLUDED.image_url,
+	summary = EXCLUDED.summary,
+	source = EXCLUDED.source,
+	published_at = EXCLUDED.published_at,
+	content = EXCLUDED.content
 	`
 	
 	stmt, err := tx.Prepare(insertSQL)
@@ -141,7 +174,7 @@ func (s *Storage) GetArticles() ([]ArticleWithContent, error) {
 	articles := make([]ArticleWithContent, 0)
 	for rows.Next() {
 		var article ArticleWithContent
-		var publishedAt []byte
+		var publishedAt time.Time
 		err := rows.Scan(
 			&article.ID,
 			&article.Title,
@@ -156,11 +189,7 @@ func (s *Storage) GetArticles() ([]ArticleWithContent, error) {
 			return nil, err
 		}
 		
-		// 解析时间
-		if t, err := time.Parse("2006-01-02 15:04:05", string(publishedAt)); err == nil {
-			article.PublishedAt = t
-		}
-		
+		article.PublishedAt = publishedAt
 		articles = append(articles, article)
 	}
 	
@@ -175,11 +204,11 @@ func (s *Storage) GetArticleByID(id string) (ArticleWithContent, bool, error) {
 	query := `
 	SELECT id, title, url, image_url, summary, source, published_at, content
 	FROM articles
-	WHERE id = ?
+	WHERE id = $1
 	`
 	
 	var article ArticleWithContent
-	var publishedAt []byte
+	var publishedAt time.Time
 	
 	err := s.db.QueryRow(query, id).Scan(
 		&article.ID,
@@ -199,11 +228,7 @@ func (s *Storage) GetArticleByID(id string) (ArticleWithContent, bool, error) {
 		return article, false, err
 	}
 	
-	// 解析时间
-	if t, err := time.Parse("2006-01-02 15:04:05", string(publishedAt)); err == nil {
-		article.PublishedAt = t
-	}
-	
+	article.PublishedAt = publishedAt
 	return article, true, nil
 }
 
@@ -215,12 +240,12 @@ func (s *Storage) SearchArticles(query string) ([]ArticleWithContent, error) {
 	searchSQL := `
 	SELECT id, title, url, image_url, summary, source, published_at, content
 	FROM articles
-	WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
+	WHERE title ILIKE $1 OR summary ILIKE $1 OR content ILIKE $1
 	ORDER BY published_at DESC
 	`
 	
 	searchTerm := "%" + query + "%"
-	rows, err := s.db.Query(searchSQL, searchTerm, searchTerm, searchTerm)
+	rows, err := s.db.Query(searchSQL, searchTerm)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +254,7 @@ func (s *Storage) SearchArticles(query string) ([]ArticleWithContent, error) {
 	articles := make([]ArticleWithContent, 0)
 	for rows.Next() {
 		var article ArticleWithContent
-		var publishedAt []byte
+		var publishedAt time.Time
 		err := rows.Scan(
 			&article.ID,
 			&article.Title,
@@ -244,11 +269,7 @@ func (s *Storage) SearchArticles(query string) ([]ArticleWithContent, error) {
 			return nil, err
 		}
 		
-		// 解析时间
-		if t, err := time.Parse("2006-01-02 15:04:05", string(publishedAt)); err == nil {
-			article.PublishedAt = t
-		}
-		
+		article.PublishedAt = publishedAt
 		articles = append(articles, article)
 	}
 	
@@ -263,7 +284,7 @@ func (s *Storage) FilterArticlesBySource(source string) ([]ArticleWithContent, e
 	query := `
 	SELECT id, title, url, image_url, summary, source, published_at, content
 	FROM articles
-	WHERE source = ?
+	WHERE source = $1
 	ORDER BY published_at DESC
 	`
 	
@@ -276,7 +297,7 @@ func (s *Storage) FilterArticlesBySource(source string) ([]ArticleWithContent, e
 	articles := make([]ArticleWithContent, 0)
 	for rows.Next() {
 		var article ArticleWithContent
-		var publishedAt []byte
+		var publishedAt time.Time
 		err := rows.Scan(
 			&article.ID,
 			&article.Title,
@@ -291,11 +312,7 @@ func (s *Storage) FilterArticlesBySource(source string) ([]ArticleWithContent, e
 			return nil, err
 		}
 		
-		// 解析时间
-		if t, err := time.Parse("2006-01-02 15:04:05", string(publishedAt)); err == nil {
-			article.PublishedAt = t
-		}
-		
+		article.PublishedAt = publishedAt
 		articles = append(articles, article)
 	}
 	
@@ -314,7 +331,7 @@ func (s *Storage) GetRecentArticles(limit int) ([]ArticleWithContent, error) {
 	`
 	
 	if limit > 0 {
-		query += " LIMIT ?"
+		query += " LIMIT $1"
 	}
 	
 	var rows *sql.Rows
@@ -334,7 +351,7 @@ func (s *Storage) GetRecentArticles(limit int) ([]ArticleWithContent, error) {
 	articles := make([]ArticleWithContent, 0)
 	for rows.Next() {
 		var article ArticleWithContent
-		var publishedAt []byte
+		var publishedAt time.Time
 		err := rows.Scan(
 			&article.ID,
 			&article.Title,
@@ -349,11 +366,7 @@ func (s *Storage) GetRecentArticles(limit int) ([]ArticleWithContent, error) {
 			return nil, err
 		}
 		
-		// 解析时间
-		if t, err := time.Parse("2006-01-02 15:04:05", string(publishedAt)); err == nil {
-			article.PublishedAt = t
-		}
-		
+		article.PublishedAt = publishedAt
 		articles = append(articles, article)
 	}
 	
@@ -367,7 +380,7 @@ func (s *Storage) Cleanup(olderThan time.Duration) (int64, error) {
 	
 	cutoff := time.Now().Add(-olderThan)
 	
-	result, err := s.db.Exec("DELETE FROM articles WHERE published_at < ?", cutoff)
+	result, err := s.db.Exec("DELETE FROM articles WHERE published_at < $1", cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -380,15 +393,17 @@ func (s *Storage) CreateUser(username, passwordHash string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	result, err := s.db.Exec(
-		"INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+	var id int64
+	err := s.db.QueryRow(
+		"INSERT INTO users (username, password_hash, created_at) VALUES ($1, $2, $3) RETURNING id",
 		username, passwordHash, time.Now(),
-	)
+	).Scan(&id)
+	
 	if err != nil {
 		return 0, err
 	}
 	
-	return result.LastInsertId()
+	return id, nil
 }
 
 // GetUserByUsername 根据用户名获取用户
@@ -400,7 +415,7 @@ func (s *Storage) GetUserByUsername(username string) (int64, string, error) {
 	var passwordHash string
 	
 	err := s.db.QueryRow(
-		"SELECT id, password_hash FROM users WHERE username = ?",
+		"SELECT id, password_hash FROM users WHERE username = $1",
 		username,
 	).Scan(&id, &passwordHash)
 	
@@ -417,7 +432,7 @@ func (s *Storage) AddBookmark(userID int64, articleID string) error {
 	defer s.mu.Unlock()
 	
 	_, err := s.db.Exec(
-		"INSERT OR IGNORE INTO bookmarks (user_id, article_id, created_at) VALUES (?, ?, ?)",
+		"INSERT INTO bookmarks (user_id, article_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
 		userID, articleID, time.Now(),
 	)
 	
@@ -430,7 +445,7 @@ func (s *Storage) RemoveBookmark(userID int64, articleID string) error {
 	defer s.mu.Unlock()
 	
 	_, err := s.db.Exec(
-		"DELETE FROM bookmarks WHERE user_id = ? AND article_id = ?",
+		"DELETE FROM bookmarks WHERE user_id = $1 AND article_id = $2",
 		userID, articleID,
 	)
 	
@@ -446,7 +461,7 @@ func (s *Storage) GetBookmarks(userID int64) ([]ArticleWithContent, error) {
 	SELECT a.id, a.title, a.url, a.image_url, a.summary, a.source, a.published_at, a.content
 	FROM articles a
 	JOIN bookmarks b ON a.id = b.article_id
-	WHERE b.user_id = ?
+	WHERE b.user_id = $1
 	ORDER BY b.created_at DESC
 	`
 	
@@ -459,7 +474,7 @@ func (s *Storage) GetBookmarks(userID int64) ([]ArticleWithContent, error) {
 	articles := make([]ArticleWithContent, 0)
 	for rows.Next() {
 		var article ArticleWithContent
-		var publishedAt []byte
+		var publishedAt time.Time
 		err := rows.Scan(
 			&article.ID,
 			&article.Title,
@@ -474,11 +489,7 @@ func (s *Storage) GetBookmarks(userID int64) ([]ArticleWithContent, error) {
 			return nil, err
 		}
 		
-		// 解析时间
-		if t, err := time.Parse("2006-01-02 15:04:05", string(publishedAt)); err == nil {
-			article.PublishedAt = t
-		}
-		
+		article.PublishedAt = publishedAt
 		articles = append(articles, article)
 	}
 	
