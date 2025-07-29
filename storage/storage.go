@@ -1,120 +1,157 @@
 package storage
 
 import (
-	"database/sql"
+	"context"
+	"strings"
 	"sync"
 	"time"
 	"game-news/scraper"
 	"log"
 	"os"
-	"github.com/lib/pq"
-	_ "github.com/mattn/go-sqlite3"
+	
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // ArticleWithContent 扩展文章结构以包含详细内容
 type ArticleWithContent struct {
-	scraper.Article
-	Content string
+	ID          string    `bson:"id"`
+	Title       string    `bson:"title"`
+	URL         string    `bson:"url"`
+	ImageURL    string    `bson:"image_url"`
+	Summary     string    `bson:"summary"`
+	Source      string    `bson:"source"`
+	PublishedAt time.Time `bson:"published_at"`
+	Content     string    `bson:"content"`
+}
+
+// User represents a user in the system
+type User struct {
+	ID           int64     `bson:"id"`
+	Username     string    `bson:"username"`
+	PasswordHash string    `bson:"password_hash"`
+	CreatedAt    time.Time `bson:"created_at"`
+}
+
+// Bookmark represents a user bookmark
+type Bookmark struct {
+	ID        int64     `bson:"id"`
+	UserID    int64     `bson:"user_id"`
+	ArticleID string    `bson:"article_id"`
+	CreatedAt time.Time `bson:"created_at"`
 }
 
 // Storage handles storage of news articles
 type Storage struct {
-	db *sql.DB
-	mu sync.RWMutex
+	client    *mongo.Client
+	database  *mongo.Database
+	articles  *mongo.Collection
+	users     *mongo.Collection
+	bookmarks *mongo.Collection
+	mu        sync.RWMutex
+	
+	// In-memory storage for when no database is available
+	inMemoryArticles map[string]ArticleWithContent
+	inMemoryUsers    map[string]User
+	inMemoryBookmarks map[int64][]string
+	useInMemory      bool
 }
 
 // NewStorage creates a new Storage instance
 func NewStorage() *Storage {
-	var db *sql.DB
-	var err error
-	
-	// 检查环境变量以确定使用哪种数据库
-	dbHost := os.Getenv("DB_HOST")
-	if dbHost != "" {
-		// 使用PostgreSQL
-		dbUser := getEnvOrDefault("DB_USER", "game_news")
-		dbPassword := getEnvOrDefault("DB_PASSWORD", "game_news_password")
-		dbName := getEnvOrDefault("DB_NAME", "game_news")
-		dbPort := getEnvOrDefault("DB_PORT", "5432")
-		
-		connStr := "host=" + dbHost + " port=" + dbPort + " user=" + dbUser + " password=" + dbPassword + " dbname=" + dbName + " sslmode=disable"
-		db, err = sql.Open("postgres", connStr)
-		if err != nil {
-			log.Fatal("Failed to connect to PostgreSQL: ", err)
-		}
-		
-		// 测试连接
-		if err := db.Ping(); err != nil {
-			log.Fatal("Failed to ping PostgreSQL: ", err)
-		}
-		log.Println("Connected to PostgreSQL database")
-	} else {
-		// 使用SQLite
-		db, err = sql.Open("sqlite3", "./game_news.db")
-		if err != nil {
-			log.Fatal("Failed to connect to SQLite: ", err)
-		}
-		log.Println("Connected to SQLite database")
+	// Default to in-memory storage
+	storage := &Storage{
+		inMemoryArticles:  make(map[string]ArticleWithContent),
+		inMemoryUsers:     make(map[string]User),
+		inMemoryBookmarks: make(map[int64][]string),
+		useInMemory:       true,
 	}
 	
-	// 创建表
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS articles (
-		id TEXT PRIMARY KEY,
-		title TEXT,
-		url TEXT,
-		image_url TEXT,
-		summary TEXT,
-		source TEXT,
-		published_at TIMESTAMP,
-		content TEXT
-	);
+	// Check if MongoDB is configured
+	mongoURI := os.Getenv("MONGODB_URI")
+	if mongoURI == "" {
+		log.Println("MONGODB_URI not set, using in-memory storage")
+		return storage
+	}
 	
-	CREATE TABLE IF NOT EXISTS users (
-		id SERIAL PRIMARY KEY,
-		username TEXT UNIQUE,
-		password_hash TEXT,
-		created_at TIMESTAMP
-	);
+	// Connect to MongoDB
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	
-	CREATE TABLE IF NOT EXISTS bookmarks (
-		id SERIAL PRIMARY KEY,
-		user_id INTEGER,
-		article_id TEXT,
-		created_at TIMESTAMP,
-		FOREIGN KEY (user_id) REFERENCES users(id),
-		FOREIGN KEY (article_id) REFERENCES articles(id)
-	);
-	
-	CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
-	CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source);
-	CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id ON bookmarks(user_id);
-	CREATE INDEX IF NOT EXISTS idx_bookmarks_article_id ON bookmarks(article_id);
-	`
-	
-	_, err = db.Exec(createTableSQL)
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		log.Fatal("Failed to create tables: ", err)
+		log.Printf("Failed to connect to MongoDB: %v, using in-memory storage", err)
+		return storage
 	}
 	
-	return &Storage{
-		db: db,
+	// Test the connection
+	err = client.Ping(ctx, nil)
+	if err != nil {
+		log.Printf("Failed to ping MongoDB: %v, using in-memory storage", err)
+		return storage
 	}
+	
+	log.Println("Connected to MongoDB")
+	
+	// Initialize collections
+	database := client.Database("game_news")
+	storage.client = client
+	storage.database = database
+	storage.articles = database.Collection("articles")
+	storage.users = database.Collection("users")
+	storage.bookmarks = database.Collection("bookmarks")
+	storage.useInMemory = false
+	
+	// Create indexes
+	storage.createIndexes()
+	
+	return storage
 }
 
-// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
-func getEnvOrDefault(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
+// createIndexes creates necessary indexes for collections
+func (s *Storage) createIndexes() {
+	if s.useInMemory {
+		return
 	}
-	return value
-}
-
-// isPostgreSQL 检查是否使用PostgreSQL数据库
-func (s *Storage) isPostgreSQL() bool {
-	// 检查驱动名称
-	return s.db.Driver() == &pq.Driver{}
+	
+	ctx := context.Background()
+	
+	// Articles indexes
+	s.articles.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys: bson.D{{"id", 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{"published_at", -1}},
+		},
+		{
+			Keys: bson.D{{"source", 1}},
+		},
+	})
+	
+	// Users indexes
+	s.users.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys: bson.D{{"username", 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{"id", 1}},
+			Options: options.Index().SetUnique(true),
+		},
+	})
+	
+	// Bookmarks indexes
+	s.bookmarks.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys: bson.D{{"user_id", 1}},
+		},
+		{
+			Keys: bson.D{{"article_id", 1}},
+		},
+	})
 }
 
 // AddArticle adds a new article to storage
@@ -122,83 +159,96 @@ func (s *Storage) AddArticle(article scraper.Article, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	var insertSQL string
-	if s.isPostgreSQL() {
-		insertSQL = `
-		INSERT INTO articles 
-		(id, title, url, image_url, summary, source, published_at, content)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (id) DO UPDATE SET
-		title = EXCLUDED.title,
-		url = EXCLUDED.url,
-		image_url = EXCLUDED.image_url,
-		summary = EXCLUDED.summary,
-		source = EXCLUDED.source,
-		published_at = EXCLUDED.published_at,
-		content = EXCLUDED.content
-		`
-	} else {
-		insertSQL = `
-		INSERT OR REPLACE INTO articles 
-		(id, title, url, image_url, summary, source, published_at, content)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`
+	// If using in-memory storage
+	if s.useInMemory {
+		articleWithContent := ArticleWithContent{
+			ID:          article.ID,
+			Title:       article.Title,
+			URL:         article.URL,
+			ImageURL:    article.ImageURL,
+			Summary:     article.Summary,
+			Source:      article.Source,
+			PublishedAt: article.PublishedAt,
+			Content:     content,
+		}
+		s.inMemoryArticles[article.ID] = articleWithContent
+		return nil
 	}
 	
-	_, err := s.db.Exec(insertSQL, article.ID, article.Title, article.URL, article.ImageURL, article.Summary, article.Source, article.PublishedAt, content)
+	// Use MongoDB
+	ctx := context.Background()
+	articleWithContent := ArticleWithContent{
+		ID:          article.ID,
+		Title:       article.Title,
+		URL:         article.URL,
+		ImageURL:    article.ImageURL,
+		Summary:     article.Summary,
+		Source:      article.Source,
+		PublishedAt: article.PublishedAt,
+		Content:     content,
+	}
+	
+	_, err := s.articles.UpdateOne(
+		ctx,
+		bson.M{"id": article.ID},
+		bson.M{"$set": articleWithContent},
+		options.Update().SetUpsert(true),
+	)
+	
 	return err
 }
 
 // AddArticles adds multiple articles to storage
-func (s *Storage) AddArticles(articles []scraper.Article, scraper *scraper.Scraper) error {
+func (s *Storage) AddArticles(articles []scraper.Article, scraperInstance *scraper.Scraper) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	
-	var insertSQL string
-	if s.isPostgreSQL() {
-		insertSQL = `
-		INSERT INTO articles 
-		(id, title, url, image_url, summary, source, published_at, content)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (id) DO UPDATE SET
-		title = EXCLUDED.title,
-		url = EXCLUDED.url,
-		image_url = EXCLUDED.image_url,
-		summary = EXCLUDED.summary,
-		source = EXCLUDED.source,
-		published_at = EXCLUDED.published_at,
-		content = EXCLUDED.content
-		`
-	} else {
-		insertSQL = `
-		INSERT OR REPLACE INTO articles 
-		(id, title, url, image_url, summary, source, published_at, content)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`
-	}
-	
-	stmt, err := tx.Prepare(insertSQL)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	defer stmt.Close()
-	
-	for _, article := range articles {
-		content, _ := scraper.ScrapeGameDetails(article.URL)
-		_, err := stmt.Exec(article.ID, article.Title, article.URL, article.ImageURL, article.Summary, article.Source, article.PublishedAt, content)
-		if err != nil {
-			tx.Rollback()
-			return err
+	// If using in-memory storage
+	if s.useInMemory {
+		for _, article := range articles {
+			content, _ := scraperInstance.ScrapeGameDetails(article.URL)
+			articleWithContent := ArticleWithContent{
+				ID:          article.ID,
+				Title:       article.Title,
+				URL:         article.URL,
+				ImageURL:    article.ImageURL,
+				Summary:     article.Summary,
+				Source:      article.Source,
+				PublishedAt: article.PublishedAt,
+				Content:     content,
+			}
+			s.inMemoryArticles[article.ID] = articleWithContent
 		}
+		return nil
 	}
 	
-	return tx.Commit()
+	// Use MongoDB
+	ctx := context.Background()
+	
+	var models []mongo.WriteModel
+	for _, article := range articles {
+		content, _ := scraperInstance.ScrapeGameDetails(article.URL)
+		articleWithContent := ArticleWithContent{
+			ID:          article.ID,
+			Title:       article.Title,
+			URL:         article.URL,
+			ImageURL:    article.ImageURL,
+			Summary:     article.Summary,
+			Source:      article.Source,
+			PublishedAt: article.PublishedAt,
+			Content:     content,
+		}
+		
+		model := mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"id": article.ID}).
+			SetUpdate(bson.M{"$set": articleWithContent}).
+			SetUpsert(true)
+		
+		models = append(models, model)
+	}
+	
+	_, err := s.articles.BulkWrite(ctx, models)
+	return err
 }
 
 // GetArticles returns all articles
@@ -206,38 +256,37 @@ func (s *Storage) GetArticles() ([]ArticleWithContent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	query := `
-	SELECT id, title, url, image_url, summary, source, published_at, content
-	FROM articles
-	ORDER BY published_at DESC
-	`
+	// If using in-memory storage
+	if s.useInMemory {
+		articles := make([]ArticleWithContent, 0, len(s.inMemoryArticles))
+		for _, article := range s.inMemoryArticles {
+			articles = append(articles, article)
+		}
+		
+		// Sort by published date (newest first)
+		for i := 0; i < len(articles)-1; i++ {
+			for j := 0; j < len(articles)-i-1; j++ {
+				if articles[j].PublishedAt.Before(articles[j+1].PublishedAt) {
+					articles[j], articles[j+1] = articles[j+1], articles[j]
+				}
+			}
+		}
+		
+		return articles, nil
+	}
 	
-	rows, err := s.db.Query(query)
+	// Use MongoDB
+	ctx := context.Background()
+	
+	cursor, err := s.articles.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{"published_at", -1}}))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 	
-	articles := make([]ArticleWithContent, 0)
-	for rows.Next() {
-		var article ArticleWithContent
-		var publishedAt time.Time
-		err := rows.Scan(
-			&article.ID,
-			&article.Title,
-			&article.URL,
-			&article.ImageURL,
-			&article.Summary,
-			&article.Source,
-			&publishedAt,
-			&article.Content,
-		)
-		if err != nil {
-			return nil, err
-		}
-		
-		article.PublishedAt = publishedAt
-		articles = append(articles, article)
+	var articles []ArticleWithContent
+	if err = cursor.All(ctx, &articles); err != nil {
+		return nil, err
 	}
 	
 	return articles, nil
@@ -248,156 +297,122 @@ func (s *Storage) GetArticleByID(id string) (ArticleWithContent, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	query := `
-	SELECT id, title, url, image_url, summary, source, published_at, content
-	FROM articles
-	WHERE id = $1
-	`
-	
-	// 对于SQLite，需要使用?占位符
-	if !s.isPostgreSQL() {
-		query = `
-		SELECT id, title, url, image_url, summary, source, published_at, content
-		FROM articles
-		WHERE id = ?
-		`
+	// If using in-memory storage
+	if s.useInMemory {
+		article, exists := s.inMemoryArticles[id]
+		return article, exists, nil
 	}
 	
+	// Use MongoDB
+	ctx := context.Background()
+	
 	var article ArticleWithContent
-	var publishedAt time.Time
-	
-	err := s.db.QueryRow(query, id).Scan(
-		&article.ID,
-		&article.Title,
-		&article.URL,
-		&article.ImageURL,
-		&article.Summary,
-		&article.Source,
-		&publishedAt,
-		&article.Content,
-	)
-	
+	err := s.articles.FindOne(ctx, bson.M{"id": id}).Decode(&article)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err == mongo.ErrNoDocuments {
 			return article, false, nil
 		}
 		return article, false, err
 	}
 	
-	article.PublishedAt = publishedAt
 	return article, true, nil
 }
 
-// SearchArticles 搜索文章
+// SearchArticles searches articles by query
 func (s *Storage) SearchArticles(query string) ([]ArticleWithContent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	searchSQL := `
-	SELECT id, title, url, image_url, summary, source, published_at, content
-	FROM articles
-	WHERE title ILIKE $1 OR summary ILIKE $1 OR content ILIKE $1
-	ORDER BY published_at DESC
-	`
-	
-	// 对于SQLite，需要使用LIKE和?占位符
-	if !s.isPostgreSQL() {
-		searchSQL = `
-		SELECT id, title, url, image_url, summary, source, published_at, content
-		FROM articles
-		WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
-		ORDER BY published_at DESC
-		`
+	// If using in-memory storage
+	if s.useInMemory {
+		articles := make([]ArticleWithContent, 0)
+		searchTerm := strings.ToLower(query)
+		
+		for _, article := range s.inMemoryArticles {
+			if strings.Contains(strings.ToLower(article.Title), searchTerm) ||
+				strings.Contains(strings.ToLower(article.Summary), searchTerm) ||
+				strings.Contains(strings.ToLower(article.Content), searchTerm) {
+				articles = append(articles, article)
+			}
+		}
+		
+		// Sort by published date (newest first)
+		for i := 0; i < len(articles)-1; i++ {
+			for j := 0; j < len(articles)-i-1; j++ {
+				if articles[j].PublishedAt.Before(articles[j+1].PublishedAt) {
+					articles[j], articles[j+1] = articles[j+1], articles[j]
+				}
+			}
+		}
+		
+		return articles, nil
 	}
 	
-	searchTerm := "%" + query + "%"
-	var rows *sql.Rows
-	var err error
+	// Use MongoDB
+	ctx := context.Background()
 	
-	if s.isPostgreSQL() {
-		rows, err = s.db.Query(searchSQL, searchTerm)
-	} else {
-		rows, err = s.db.Query(searchSQL, searchTerm, searchTerm, searchTerm)
+	searchRegex := bson.M{"$regex": query, "$options": "i"}
+	filter := bson.M{
+		"$or": []bson.M{
+			{"title": searchRegex},
+			{"summary": searchRegex},
+			{"content": searchRegex},
+		},
 	}
 	
+	cursor, err := s.articles.Find(ctx, filter, options.Find().SetSort(bson.D{{"published_at", -1}}))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 	
-	articles := make([]ArticleWithContent, 0)
-	for rows.Next() {
-		var article ArticleWithContent
-		var publishedAt time.Time
-		err := rows.Scan(
-			&article.ID,
-			&article.Title,
-			&article.URL,
-			&article.ImageURL,
-			&article.Summary,
-			&article.Source,
-			&publishedAt,
-			&article.Content,
-		)
-		if err != nil {
-			return nil, err
-		}
-		
-		article.PublishedAt = publishedAt
-		articles = append(articles, article)
+	var articles []ArticleWithContent
+	if err = cursor.All(ctx, &articles); err != nil {
+		return nil, err
 	}
 	
 	return articles, nil
 }
 
-// FilterArticlesBySource 按来源过滤文章
+// FilterArticlesBySource filters articles by source
 func (s *Storage) FilterArticlesBySource(source string) ([]ArticleWithContent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	query := `
-	SELECT id, title, url, image_url, summary, source, published_at, content
-	FROM articles
-	WHERE source = $1
-	ORDER BY published_at DESC
-	`
-	
-	// 对于SQLite，需要使用?占位符
-	if !s.isPostgreSQL() {
-		query = `
-		SELECT id, title, url, image_url, summary, source, published_at, content
-		FROM articles
-		WHERE source = ?
-		ORDER BY published_at DESC
-		`
+	// If using in-memory storage
+	if s.useInMemory {
+		articles := make([]ArticleWithContent, 0)
+		
+		for _, article := range s.inMemoryArticles {
+			if article.Source == source {
+				articles = append(articles, article)
+			}
+		}
+		
+		// Sort by published date (newest first)
+		for i := 0; i < len(articles)-1; i++ {
+			for j := 0; j < len(articles)-i-1; j++ {
+				if articles[j].PublishedAt.Before(articles[j+1].PublishedAt) {
+					articles[j], articles[j+1] = articles[j+1], articles[j]
+				}
+			}
+		}
+		
+		return articles, nil
 	}
 	
-	rows, err := s.db.Query(query, source)
+	// Use MongoDB
+	ctx := context.Background()
+	
+	cursor, err := s.articles.Find(ctx, bson.M{"source": source}, options.Find().SetSort(bson.D{{"published_at", -1}}))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 	
-	articles := make([]ArticleWithContent, 0)
-	for rows.Next() {
-		var article ArticleWithContent
-		var publishedAt time.Time
-		err := rows.Scan(
-			&article.ID,
-			&article.Title,
-			&article.URL,
-			&article.ImageURL,
-			&article.Summary,
-			&article.Source,
-			&publishedAt,
-			&article.Content,
-		)
-		if err != nil {
-			return nil, err
-		}
-		
-		article.PublishedAt = publishedAt
-		articles = append(articles, article)
+	var articles []ArticleWithContent
+	if err = cursor.All(ctx, &articles); err != nil {
+		return nil, err
 	}
 	
 	return articles, nil
@@ -408,54 +423,47 @@ func (s *Storage) GetRecentArticles(limit int) ([]ArticleWithContent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	query := `
-	SELECT id, title, url, image_url, summary, source, published_at, content
-	FROM articles
-	ORDER BY published_at DESC
-	`
-	
-	if limit > 0 {
-		if s.isPostgreSQL() {
-			query += " LIMIT $1"
-		} else {
-			query += " LIMIT ?"
+	// If using in-memory storage
+	if s.useInMemory {
+		articles := make([]ArticleWithContent, 0, len(s.inMemoryArticles))
+		for _, article := range s.inMemoryArticles {
+			articles = append(articles, article)
 		}
+		
+		// Sort by published date (newest first)
+		for i := 0; i < len(articles)-1; i++ {
+			for j := 0; j < len(articles)-i-1; j++ {
+				if articles[j].PublishedAt.Before(articles[j+1].PublishedAt) {
+					articles[j], articles[j+1] = articles[j+1], articles[j]
+				}
+			}
+		}
+		
+		// Limit results
+		if limit > 0 && limit < len(articles) {
+			articles = articles[:limit]
+		}
+		
+		return articles, nil
 	}
 	
-	var rows *sql.Rows
-	var err error
+	// Use MongoDB
+	ctx := context.Background()
 	
+	findOptions := options.Find().SetSort(bson.D{{"published_at", -1}})
 	if limit > 0 {
-		rows, err = s.db.Query(query, limit)
-	} else {
-		rows, err = s.db.Query(query)
+		findOptions.SetLimit(int64(limit))
 	}
 	
+	cursor, err := s.articles.Find(ctx, bson.M{}, findOptions)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 	
-	articles := make([]ArticleWithContent, 0)
-	for rows.Next() {
-		var article ArticleWithContent
-		var publishedAt time.Time
-		err := rows.Scan(
-			&article.ID,
-			&article.Title,
-			&article.URL,
-			&article.ImageURL,
-			&article.Summary,
-			&article.Source,
-			&publishedAt,
-			&article.Content,
-		)
-		if err != nil {
-			return nil, err
-		}
-		
-		article.PublishedAt = publishedAt
-		articles = append(articles, article)
+	var articles []ArticleWithContent
+	if err = cursor.All(ctx, &articles); err != nil {
+		return nil, err
 	}
 	
 	return articles, nil
@@ -468,46 +476,67 @@ func (s *Storage) Cleanup(olderThan time.Duration) (int64, error) {
 	
 	cutoff := time.Now().Add(-olderThan)
 	
-	var result sql.Result
-	var err error
-	
-	if s.isPostgreSQL() {
-		result, err = s.db.Exec("DELETE FROM articles WHERE published_at < $1", cutoff)
-	} else {
-		result, err = s.db.Exec("DELETE FROM articles WHERE published_at < ?", cutoff)
+	// If using in-memory storage
+	if s.useInMemory {
+		count := int64(0)
+		for id, article := range s.inMemoryArticles {
+			if article.PublishedAt.Before(cutoff) {
+				delete(s.inMemoryArticles, id)
+				count++
+			}
+		}
+		return count, nil
 	}
 	
+	// Use MongoDB
+	ctx := context.Background()
+	
+	result, err := s.articles.DeleteMany(ctx, bson.M{"published_at": bson.M{"$lt": cutoff}})
 	if err != nil {
 		return 0, err
 	}
 	
-	return result.RowsAffected()
+	return result.DeletedCount, nil
 }
 
-// CreateUser 创建新用户
+// CreateUser creates a new user
 func (s *Storage) CreateUser(username, passwordHash string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	var id int64
-	var err error
-	
-	if s.isPostgreSQL() {
-		err = s.db.QueryRow(
-			"INSERT INTO users (username, password_hash, created_at) VALUES ($1, $2, $3) RETURNING id",
-			username, passwordHash, time.Now(),
-		).Scan(&id)
-	} else {
-		result, err := s.db.Exec(
-			"INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-			username, passwordHash, time.Now(),
-		)
-		if err != nil {
-			return 0, err
+	// If using in-memory storage
+	if s.useInMemory {
+		// Simple ID generation for in-memory storage
+		id := int64(len(s.inMemoryUsers) + 1)
+		user := User{
+			ID:           id,
+			Username:     username,
+			PasswordHash: passwordHash,
+			CreatedAt:    time.Now(),
 		}
-		id, err = result.LastInsertId()
+		s.inMemoryUsers[username] = user
+		return id, nil
 	}
 	
+	// Use MongoDB
+	ctx := context.Background()
+	
+	// Find the max ID
+	var maxUser User
+	err := s.users.FindOne(ctx, bson.M{}, options.FindOne().SetSort(bson.D{{"id", -1}})).Decode(&maxUser)
+	var id int64 = 1
+	if err == nil {
+		id = maxUser.ID + 1
+	}
+	
+	user := User{
+		ID:           id,
+		Username:     username,
+		PasswordHash: passwordHash,
+		CreatedAt:    time.Now(),
+	}
+	
+	_, err = s.users.InsertOne(ctx, user)
 	if err != nil {
 		return 0, err
 	}
@@ -515,126 +544,153 @@ func (s *Storage) CreateUser(username, passwordHash string) (int64, error) {
 	return id, nil
 }
 
-// GetUserByUsername 根据用户名获取用户
+// GetUserByUsername gets user by username
 func (s *Storage) GetUserByUsername(username string) (int64, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	var id int64
-	var passwordHash string
-	
-	var err error
-	if s.isPostgreSQL() {
-		err = s.db.QueryRow(
-			"SELECT id, password_hash FROM users WHERE username = $1",
-			username,
-		).Scan(&id, &passwordHash)
-	} else {
-		err = s.db.QueryRow(
-			"SELECT id, password_hash FROM users WHERE username = ?",
-			username,
-		).Scan(&id, &passwordHash)
+	// If using in-memory storage
+	if s.useInMemory {
+		user, exists := s.inMemoryUsers[username]
+		if !exists {
+			return 0, "", mongo.ErrNoDocuments // This is just for consistency, we should return a different error
+		}
+		return user.ID, user.PasswordHash, nil
 	}
 	
+	// Use MongoDB
+	ctx := context.Background()
+	
+	var user User
+	err := s.users.FindOne(ctx, bson.M{"username": username}).Decode(&user)
 	if err != nil {
 		return 0, "", err
 	}
 	
-	return id, passwordHash, nil
+	return user.ID, user.PasswordHash, nil
 }
 
-// AddBookmark 添加书签
+// AddBookmark adds a bookmark
 func (s *Storage) AddBookmark(userID int64, articleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	var err error
-	if s.isPostgreSQL() {
-		_, err = s.db.Exec(
-			"INSERT INTO bookmarks (user_id, article_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-			userID, articleID, time.Now(),
-		)
-	} else {
-		_, err = s.db.Exec(
-			"INSERT OR IGNORE INTO bookmarks (user_id, article_id, created_at) VALUES (?, ?, ?)",
-			userID, articleID, time.Now(),
-		)
+	// If using in-memory storage
+	if s.useInMemory {
+		// Check if bookmark already exists
+		exists := false
+		for _, bookmarkedArticleID := range s.inMemoryBookmarks[userID] {
+			if bookmarkedArticleID == articleID {
+				exists = true
+				break
+			}
+		}
+		
+		if !exists {
+			s.inMemoryBookmarks[userID] = append(s.inMemoryBookmarks[userID], articleID)
+		}
+		return nil
 	}
+	
+	// Use MongoDB
+	ctx := context.Background()
+	
+	bookmark := Bookmark{
+		UserID:    userID,
+		ArticleID: articleID,
+		CreatedAt: time.Now(),
+	}
+	
+	// Use upsert to avoid duplicates
+	_, err := s.bookmarks.UpdateOne(
+		ctx,
+		bson.M{"user_id": userID, "article_id": articleID},
+		bson.M{"$set": bookmark},
+		options.Update().SetUpsert(true),
+	)
 	
 	return err
 }
 
-// RemoveBookmark 删除书签
+// RemoveBookmark removes a bookmark
 func (s *Storage) RemoveBookmark(userID int64, articleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
-	var err error
-	if s.isPostgreSQL() {
-		_, err = s.db.Exec(
-			"DELETE FROM bookmarks WHERE user_id = $1 AND article_id = $2",
-			userID, articleID,
-		)
-	} else {
-		_, err = s.db.Exec(
-			"DELETE FROM bookmarks WHERE user_id = ? AND article_id = ?",
-			userID, articleID,
-		)
+	// If using in-memory storage
+	if s.useInMemory {
+		bookmarks := s.inMemoryBookmarks[userID]
+		for i, bookmarkedArticleID := range bookmarks {
+			if bookmarkedArticleID == articleID {
+				// Remove the bookmark
+				s.inMemoryBookmarks[userID] = append(bookmarks[:i], bookmarks[i+1:]...)
+				break
+			}
+		}
+		return nil
 	}
 	
+	// Use MongoDB
+	ctx := context.Background()
+	
+	_, err := s.bookmarks.DeleteOne(ctx, bson.M{"user_id": userID, "article_id": articleID})
 	return err
 }
 
-// GetBookmarks 获取用户书签
+// GetBookmarks gets user bookmarks
 func (s *Storage) GetBookmarks(userID int64) ([]ArticleWithContent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
-	query := `
-	SELECT a.id, a.title, a.url, a.image_url, a.summary, a.source, a.published_at, a.content
-	FROM articles a
-	JOIN bookmarks b ON a.id = b.article_id
-	WHERE b.user_id = $1
-	ORDER BY b.created_at DESC
-	`
-	
-	// 对于SQLite，需要使用?占位符
-	if !s.isPostgreSQL() {
-		query = `
-		SELECT a.id, a.title, a.url, a.image_url, a.summary, a.source, a.published_at, a.content
-		FROM articles a
-		JOIN bookmarks b ON a.id = b.article_id
-		WHERE b.user_id = ?
-		ORDER BY b.created_at DESC
-		`
+	// If using in-memory storage
+	if s.useInMemory {
+		articleIDs := s.inMemoryBookmarks[userID]
+		articles := make([]ArticleWithContent, 0, len(articleIDs))
+		
+		for _, articleID := range articleIDs {
+			if article, exists := s.inMemoryArticles[articleID]; exists {
+				articles = append(articles, article)
+			}
+		}
+		
+		// Sort by bookmark creation date (newest first)
+		// Since we don't store bookmark creation date in in-memory storage,
+		// we'll just return them in the order they were added
+		return articles, nil
 	}
 	
-	rows, err := s.db.Query(query, userID)
+	// Use MongoDB
+	ctx := context.Background()
+	
+	// First, get the bookmarked article IDs
+	cursor, err := s.bookmarks.Find(ctx, bson.M{"user_id": userID})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 	
-	articles := make([]ArticleWithContent, 0)
-	for rows.Next() {
-		var article ArticleWithContent
-		var publishedAt time.Time
-		err := rows.Scan(
-			&article.ID,
-			&article.Title,
-			&article.URL,
-			&article.ImageURL,
-			&article.Summary,
-			&article.Source,
-			&publishedAt,
-			&article.Content,
-		)
-		if err != nil {
-			return nil, err
-		}
-		
-		article.PublishedAt = publishedAt
-		articles = append(articles, article)
+	var bookmarks []Bookmark
+	if err = cursor.All(ctx, &bookmarks); err != nil {
+		return nil, err
+	}
+	
+	// Extract article IDs
+	articleIDs := make([]string, len(bookmarks))
+	for i, bookmark := range bookmarks {
+		articleIDs[i] = bookmark.ArticleID
+	}
+	
+	// Then get the articles
+	filter := bson.M{"id": bson.M{"$in": articleIDs}}
+	cursor, err = s.articles.Find(ctx, filter, options.Find().SetSort(bson.D{{"published_at", -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	
+	var articles []ArticleWithContent
+	if err = cursor.All(ctx, &articles); err != nil {
+		return nil, err
 	}
 	
 	return articles, nil

@@ -13,8 +13,9 @@
 
 # Dependency directories
 node_modules/
+go.work
 
-# IDEs
+# Go workspace file
 .vscode/
 .idea/
 
@@ -37,6 +38,3 @@ Thumbs.db
 
 # Logs
 *.log
-
-# Temporary files
-*.tmp

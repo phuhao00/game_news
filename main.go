@@ -81,10 +81,14 @@ func main() {
 	router.Static("/static", "./dist/static")
 	router.StaticFile("/", "./dist/index.html")
 	router.StaticFile("/about", "./dist/index.html")
-	router.StaticFile("/news/*id", "./dist/index.html")
 	router.StaticFile("/search", "./dist/index.html")
 	router.StaticFile("/bookmarks", "./dist/index.html")
 	router.StaticFile("/auth", "./dist/index.html")
+	
+	// Serve the index.html file for all routes to support client-side routing
+	router.NoRoute(func(c *gin.Context) {
+		c.File("./dist/index.html")
+	})
 	
 	// 设置API路由
 	api := router.Group("/api")
@@ -326,8 +330,6 @@ func authMiddleware(store *storage.Storage) gin.HandlerFunc {
 // addBookmark 添加书签
 func addBookmark(store *storage.Storage) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.MustGet("user_id").(string)
-		
 		var req BookmarkRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -343,8 +345,6 @@ func addBookmark(store *storage.Storage) gin.HandlerFunc {
 // removeBookmark 删除书签
 func removeBookmark(store *storage.Storage) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.MustGet("user_id").(string)
-		
 		var req BookmarkRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
