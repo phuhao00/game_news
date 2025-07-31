@@ -69,9 +69,9 @@ func NewStorage() *Storage {
 	}
 	
 	// Check if MongoDB is configured
-	mongoURI := os.Getenv("MONGODB_URI")
+	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
-		log.Println("MONGODB_URI not set, using in-memory storage")
+		log.Println("MONGO_URI not set, using in-memory storage")
 		return storage
 	}
 	

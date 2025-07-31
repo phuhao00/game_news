@@ -14,7 +14,7 @@ A modern web application for collecting and browsing the latest game news, built
 - **Go** programming language
 - **Gin Web Framework** for REST API
 - **Colly** for web scraping
-- **PostgreSQL** or **SQLite** for data storage
+- **MongoDB** for data storage
 - **CORS** support for frontend integration
 - **BCrypt** for password hashing
 
@@ -26,7 +26,7 @@ A modern web application for collecting and browsing the latest game news, built
 - Type-safe codebase with TypeScript
 - Single Page Application (SPA) architecture
 - Automated news scraping with Colly
-- Persistent data storage with PostgreSQL or SQLite
+- Persistent data storage with MongoDB
 - Full article content retrieval
 - Original source linking
 - Search functionality
@@ -132,8 +132,8 @@ This application supports deployment using Docker and Docker Compose for easy se
 
 This will start the following services:
 - Backend application on port 8080
-- PostgreSQL database on port 5432
-- Adminer database management tool on port 8081
+- MongoDB database on port 27017
+- Mongo Express database management tool on port 8081
 
 2. Access the application:
    - Main application: http://localhost:8080
@@ -168,10 +168,7 @@ The application supports the following environment variables for configuration:
 
 | Variable | Description | Default Value |
 |----------|-------------|---------------|
-| `DB_HOST` | Database host (set to use PostgreSQL) | (empty - uses SQLite) |
-| `DB_PORT` | Database port | `5432` |
-| `DB_USER` | Database user | `game_news` |
-| `DB_PASSWORD` | Database password | `game_news_password` |
+| `MONGO_URI` | MongoDB connection URI | (empty - uses in-memory storage) |
 | `DB_NAME` | Database name | `game_news` |
 | `PORT` | Application port | `8080` |
 
@@ -186,8 +183,8 @@ If you encounter network issues when pulling images with Docker Compose:
 1. Try using a different Docker registry mirror
 2. Manually pull the images:
    ```bash
-   docker pull postgres:15-alpine
-   docker pull adminer:4.8.1
+   docker pull mongo:7-jammy
+   docker pull mongo-express:1.0.2-20
    ```
 3. Then run:
    ```bash
@@ -252,7 +249,7 @@ The scraper runs periodically to fetch the latest news and update the storage. I
 
 ## Data Storage
 
-Articles are stored persistently in either PostgreSQL or SQLite with the following features:
+Articles are stored persistently in MongoDB with the following features:
 - Automatic cleanup of articles older than 7 days
 - Efficient lookup by ID
 - Sorting by publication date
@@ -260,9 +257,9 @@ Articles are stored persistently in either PostgreSQL or SQLite with the followi
 - User management with password hashing
 - Bookmark system
 
-The application automatically detects if a PostgreSQL database is available and connects to it. If not, it falls back to SQLite for simpler setups.
+The application automatically detects if MongoDB is available and connects to it. If not, it falls back to in-memory storage for simpler setups.
 
-To use PostgreSQL, set the `DB_HOST` environment variable. Otherwise, SQLite will be used by default.
+To use MongoDB, set the `MONGO_URI` environment variable. Otherwise, in-memory storage will be used by default.
 
 ## Mobile App Version
 
