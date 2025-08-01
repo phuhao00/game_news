@@ -1,0 +1,4 @@
+{
+  path: '/home',
+  component: HomePage,
+},
